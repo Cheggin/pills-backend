@@ -7,3 +7,4 @@ selenium
 flask
 flask_cors
 pillow
+gunicorn
