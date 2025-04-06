@@ -4,7 +4,6 @@ requests
 bs4
 dotenv
 selenium
-time
 flask
 base64
 flask_cors
