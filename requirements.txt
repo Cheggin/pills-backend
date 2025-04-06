@@ -1,6 +1,5 @@
 google
 google.genai
-os
 requests
 bs4
 dotenv
