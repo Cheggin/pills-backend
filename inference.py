@@ -11,9 +11,12 @@ from selenium import webdriver
 import time
 import bs4
 import requests
+import json
+from google.oauth2 import service_account
 
 load_dotenv()
-
+service_account_info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON'])
+credentials = service_account.Credentials.from_service_account_info(service_account_info)
 PROJECT_ID = os.getenv("PROJECT_ID")
 REGION = os.getenv("REGION")
 ENDPOINT_ID = os.getenv("ENDPOINT_ID")
@@ -23,6 +26,7 @@ def query_pill_features(image_bytes):
         vertexai=True,
         project=PROJECT_ID,
         location=REGION,
+        credentials=credentials
     )
 
     msg1_image1 = types.Part.from_bytes(
