@@ -7,4 +7,3 @@ selenium
 flask
 flask_cors
 pillow
-io
