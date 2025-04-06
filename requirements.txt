@@ -8,3 +8,4 @@ flask
 flask_cors
 pillow
 gunicorn
+google.cloud
