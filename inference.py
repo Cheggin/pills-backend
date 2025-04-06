@@ -1,121 +1,74 @@
-from google import genai
-from google.genai import types
 import os
+import json
+import time
+import base64
 import requests
+import bs4
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from selenium.webdriver.chrome.options import Options
-import requests
-from bs4 import BeautifulSoup
 from selenium import webdriver
-import time
-import bs4
-import requests
-import json
+from selenium.webdriver.chrome.options import Options
 from google.oauth2 import service_account
+from google.cloud import aiplatform
 
 load_dotenv()
+
+# Load credentials
 service_account_info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON'])
 credentials = service_account.Credentials.from_service_account_info(service_account_info)
+
+# Environment config
 PROJECT_ID = os.getenv("PROJECT_ID")
 REGION = os.getenv("REGION")
 ENDPOINT_ID = os.getenv("ENDPOINT_ID")
 
+aiplatform.init(project=PROJECT_ID, location=REGION, credentials=credentials)
+endpoint = aiplatform.Endpoint(endpoint_name=ENDPOINT_ID)
+
 def query_pill_features(image_bytes):
-    client = genai.Client(
-        vertexai=True,
-        project=PROJECT_ID,
-        location=REGION,
-        credentials=credentials
-    )
+    encoded_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    msg1_image1 = types.Part.from_bytes(
-        data=image_bytes,
-        mime_type="image/png",
-    )
+    instances = [{
+        "prompt": [
+            {"mimeType": "image/png", "data": encoded_image},
+            {"text": "Get the color, shape, and imprint of this pill."}
+        ]
+    }]
 
-    model = f"projects/{PROJECT_ID}/locations/{REGION}/endpoints/{ENDPOINT_ID}"
-    contents = [
-        types.Content(
-            role="user",
-            parts=[
-                msg1_image1,
-                types.Part.from_text(text="""Get the color, shape, and imprint of this pill.""")
-            ]
-        ),
-    ]
-    generate_content_config = types.GenerateContentConfig(
-        temperature=0.2,
-        top_p=0.8,
-        max_output_tokens=1024,
-        response_modalities=["TEXT"],
-        safety_settings=[
-            types.SafetySetting(
-                category="HARM_CATEGORY_HATE_SPEECH",
-                threshold="OFF"
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="OFF"
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold="OFF"
-            ),
-            types.SafetySetting(
-                category="HARM_CATEGORY_HARASSMENT",
-                threshold="OFF"
-            )
-        ],
-    )
+    response = endpoint.predict(instances=instances)
+    result_text = response.predictions[0] if response.predictions else ""
 
-    response = client.models.generate_content(
-        model=model,
-        contents=contents,
-        config=generate_content_config,
-    )
-
-    features = response.text.split(",")
-    imprint = features[0]
-    color = features[1]
-    shape = features[2]
+    features = [f.strip() for f in result_text.split(",")]
+    imprint = features[0] if len(features) > 0 else "N/A"
+    color = features[1] if len(features) > 1 else "N/A"
+    shape = features[2] if len(features) > 2 else "N/A"
 
     return imprint, color, shape
 
 def query_drugs(imprint: str, color: str, shape: str):
     url = f"https://www.drugs.com/imprints.php?imprint={imprint}&color={color}&shape={shape}"
-
     response = requests.get(url)
+
+    output = []
     if response.status_code == 200:
-        if response:
-            html_content = response.text
-            soup = BeautifulSoup(html_content, "html.parser")
-            
-            pills = soup.find_all("a", string="View details")
-            
-            results = []
-            for pill_link in pills:
-                container = pill_link.find_parent("div")
-                if container:
-                    text = container.get_text(" ", strip=True)
-                    results.append(text)
-            
-            i = 0
-            output = []
-            if results:
-                print("Found pill information!")
-                for r in results:
-                    if i < 3:
-                        if r is None:
-                            print("Bad pill data")
-                        else:
-                            output.append(r)
-                        i += 1
-            else:
-                print("No pill details found using the current parsing strategy.")
+        soup = BeautifulSoup(response.text, "html.parser")
+        pills = soup.find_all("a", string="View details")
+
+        results = []
+        for pill_link in pills:
+            container = pill_link.find_parent("div")
+            if container:
+                text = container.get_text(" ", strip=True)
+                results.append(text)
+
+        if results:
+            print("Found pill information!")
+            output = results[:3]
+        else:
+            print("No pill details found using the current parsing strategy.")
     else:
         print(f"Error fetching page: Status code {response.status_code}")
-        
+
     return {
         "imprint": imprint,
         "color": color,
@@ -128,17 +81,15 @@ def query_drugs(imprint: str, color: str, shape: str):
 def query_side_effects(drug_name: str):
     url = f"https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct:\"{drug_name}\"&limit=10"
     response = requests.get(url)
-    
+
     if response.status_code == 200:
         data = response.json()
-        side_effects = []
-        
-        for event in data.get("results", []):
-            reactions = event.get("patient", {}).get("reaction", [])
-            for reaction in reactions:
-                if "reactionmeddrapt" in reaction:
-                    side_effects.append(reaction["reactionmeddrapt"])
-        
+        side_effects = [
+            reaction["reactionmeddrapt"]
+            for event in data.get("results", [])
+            for reaction in event.get("patient", {}).get("reaction", [])
+            if "reactionmeddrapt" in reaction
+        ]
         return list(set(side_effects))
     else:
         print(f"Error fetching side effects: Status code {response.status_code}")
@@ -150,23 +101,23 @@ chrome_options.add_argument("--disable-gpu")
 
 def get_id(drug_name, sleep_time=1):
     driver = webdriver.Chrome(options=chrome_options)
-
     driver.get(f"https://www.drugs.com/interaction/list/?searchterm={drug_name}")
     previous_url = driver.current_url
 
     time.sleep(sleep_time)
     current_url = driver.current_url
     drug_id = None
+
     if current_url != previous_url:
         print(f'URL changed to: {current_url}')
         drug_id = current_url.split('?drug_list=')[1]
         print(f'Drug ID: {drug_id}')
     else:
         print("URL did not change. Retrying...")
-        get_id(drug_name, sleep_time + 1)
-        
-    driver.quit()
+        driver.quit()
+        return get_id(drug_name, sleep_time + 1)
 
+    driver.quit()
     return drug_id
 
 def query_ddi(drug_name1, drug_name2):
@@ -175,7 +126,6 @@ def query_ddi(drug_name1, drug_name2):
     response.raise_for_status()
 
     soup = bs4.BeautifulSoup(response.text, 'html.parser')
-
     results = {}
 
     header = soup.find('h2', string=lambda s: s and 'drug and food interactions' in s.lower())
@@ -210,15 +160,16 @@ def query_ddi(drug_name1, drug_name2):
             applies_to_tag = header_div.find("p")
             if applies_to_tag:
                 item["applies_to"] = applies_to_tag.get_text(strip=True)
-        description_paragraphs = []
-        for p in instance.find_all("p", recursive=False):
-            if "Switch to professional" in p.get_text():
-                continue
-            if header_div and p in header_div.find_all("p"):
-                continue
-            description_paragraphs.append(p.get_text(strip=True))
+
+        description_paragraphs = [
+            p.get_text(strip=True)
+            for p in instance.find_all("p", recursive=False)
+            if "Switch to professional" not in p.get_text() and (not header_div or p not in header_div.find_all("p"))
+        ]
+
         if description_paragraphs:
             item["description"] = " ".join(description_paragraphs)
+
         results[f"{ordinal(i)} interaction"] = item
 
     return results
