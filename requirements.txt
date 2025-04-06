@@ -3,7 +3,6 @@ google.genai
 requests
 bs4
 dotenv
-selenium.webdriver.chrome.options
 selenium
 time
 flask
