@@ -1,0 +1,14 @@
+google
+google.genai
+os
+requests
+bs4
+dotenv
+selenium.webdriver.chrome.options
+selenium
+time
+flask
+base64
+flask_cors
+pillow
+io
